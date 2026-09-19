@@ -9,10 +9,17 @@ signal died(enemy: Node3D)
 @export var melee_damage: int = 5
 @export var attack_range: float = 2.0
 @export var attack_cooldown: float = 1.0
-## When a chase makes no headway for this long, sidestep for `avoid_duration`.
-## Keeps enemies from pinning themselves on fences and parked cars.
-@export var stuck_threshold: float = 0.35
+## Anti-jam. A chase counts as blocked only when the enemy is touching world
+## geometry AND is no closer to the player than its best-ever approach, so a
+## player simply outrunning an enemy never trips it.
+## First response is a sidestep; if that still fails, the enemy phases - it
+## walks straight through the obstruction for `phase_duration` seconds.
+## Without this, enemies wedge on fences and parked cars, stay alive forever,
+## and the wave gate never opens.
+@export var stuck_threshold: float = 0.4
 @export var avoid_duration: float = 0.9
+@export var phase_after: float = 2.5
+@export var phase_duration: float = 1.2
 
 @export_group("Look")
 @export var body_scale: float = 0.6
@@ -34,8 +41,9 @@ var _flash_timer: float = 0.0
 var _squash_tween: Tween
 var _stuck_time: float = 0.0
 var _avoid_timer: float = 0.0
+var _phase_timer: float = 0.0
+var _best_distance: float = INF
 var _avoid_sign: float = 1.0
-var _last_position: Vector3 = Vector3.ZERO
 
 @onready var visual: Node3D = $Visual
 @onready var collision_shape: CollisionShape3D = $CollisionShape3D
@@ -55,7 +63,6 @@ func _ready() -> void:
 	var found := get_tree().get_first_node_in_group("player")
 	if found is CharacterBody3D:
 		_player = found as CharacterBody3D
-	_last_position = global_position
 	_avoid_sign = 1.0 if randf() < 0.5 else -1.0
 
 
@@ -85,6 +92,15 @@ func _physics_process(delta: float) -> void:
 		if global_position.distance_to(flat_target) > 0.05:
 			look_at(flat_target, Vector3.UP)
 
+	# Phasing: push straight through whatever is in the way, ignoring physics,
+	# but keep the current height so we never drop through the ground.
+	if _phase_timer > 0.0:
+		_phase_timer -= delta
+		var escape := to_player.normalized()
+		global_position += Vector3(escape.x, 0.0, escape.z) * move_speed * delta
+		velocity = Vector3.ZERO
+		return
+
 	if distance > attack_range:
 		var dir := to_player.normalized()
 		if _avoid_timer > 0.0:
@@ -104,19 +120,40 @@ func _physics_process(delta: float) -> void:
 
 
 func _update_stuck_state(delta: float, distance: float) -> void:
-	var moved := global_position - _last_position
-	moved.y = 0.0
-	_last_position = global_position
 	if distance <= attack_range:
 		_stuck_time = 0.0
+		_best_distance = distance
 		return
-	if moved.length() < move_speed * delta * 0.3:
-		_stuck_time += delta
-		if _stuck_time > stuck_threshold and _avoid_timer <= 0.0:
-			_stuck_time = 0.0
-			_avoid_timer = avoid_duration
-	else:
+
+	if distance < _best_distance - 0.25:
+		_best_distance = distance
 		_stuck_time = 0.0
+		return
+
+	if not _is_blocked_by_world():
+		_stuck_time = 0.0
+		return
+
+	_stuck_time += delta
+	if _stuck_time > stuck_threshold and _avoid_timer <= 0.0:
+		_avoid_timer = avoid_duration
+	if _stuck_time > phase_after:
+		_stuck_time = 0.0
+		_avoid_timer = 0.0
+		_phase_timer = phase_duration
+		_best_distance = distance
+
+
+## True when we are pressed against level geometry rather than the player.
+func _is_blocked_by_world() -> bool:
+	for i in get_slide_collision_count():
+		var collider := get_slide_collision(i).get_collider()
+		if collider == null:
+			continue
+		var node := collider as Node
+		if node != null and not node.is_in_group("player"):
+			return true
+	return false
 
 
 func _attack() -> void:

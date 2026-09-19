@@ -62,9 +62,18 @@ Both come from the same `enemy.gd`; the spawner configures the exports at spawn
 time (~70% gnomes, ~30% mall cops).
 
 Enemies sit on **collision layer 2** and mask only layer 1, so they walk through
-each other instead of jamming up, and they sidestep for `avoid_duration` seconds
-whenever a chase stops making headway (`stuck_threshold`). Without that they
-wedge themselves on fences and parked cars.
+each other instead of jamming up.
+
+They also have a two-stage anti-jam, because without it they wedge themselves on
+fences and parked cars, never die, and the wave gate never opens:
+
+1. A chase counts as *blocked* only when the enemy is touching level geometry
+   **and** is no closer to the player than its best-ever approach — so a player
+   simply outrunning an enemy never trips it.
+2. After `stuck_threshold` seconds blocked, it sidesteps for `avoid_duration`.
+   If it is still blocked at `phase_after`, it **phases**: for `phase_duration`
+   seconds it walks straight through the obstruction, ignoring physics but
+   holding its current height so it can't drop through the ground.
 
 ### Waves
 
